@@ -8,6 +8,8 @@ Created on Wed Mar 18 10:44:29 2026
 from __future__ import annotations
 
 import json
+from datetime import datetime
+import traceback
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -41,6 +43,8 @@ class ProjectionJob:
 def _emit(cb: Optional[Callable[[str], None]], message: str) -> None:
     if cb:
         cb(message)
+
+
 
 
 def process_projection_job(
