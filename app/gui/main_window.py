@@ -11,23 +11,10 @@ from pathlib import Path
 
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
-    QFileDialog,
-    QGridLayout,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QListWidget,
-    QMainWindow,
-    QMessageBox,
-    QPushButton,
-    QCheckBox,
-    QComboBox,
-    QPlainTextEdit,
-    QProgressBar,
-    QSpinBox,
-    QVBoxLayout,
-    QWidget,
+    QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QMainWindow, QMessageBox, QPushButton, QCheckBox, QComboBox,
+    QPlainTextEdit, QProgressBar, QSpinBox, QDoubleSpinBox, QFormLayout,
+    QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from app.gui.workers import ProjectionJobWorker
@@ -52,6 +39,50 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_algorithm_group())
         root.addWidget(self._build_run_group())
         root.addWidget(self._build_log_group())
+        
+    def _make_int_spin(self, value: int, minimum: int = 1, maximum: int = 100000) -> QSpinBox:
+        w = QSpinBox()
+        w.setRange(minimum, maximum)
+        w.setValue(value)
+        return w
+
+    def _make_float_spin(
+        self,
+        value: float,
+        minimum: float = 0.0,
+        maximum: float = 1_000_000.0,
+        decimals: int = 3,
+    ) -> QDoubleSpinBox:
+        w = QDoubleSpinBox()
+        w.setRange(minimum, maximum)
+        w.setDecimals(decimals)
+        w.setValue(value)
+        return w
+
+    def _add_correction_page(
+        self,
+        name: str,
+        rows: list[tuple[str, QWidget]] | None = None,
+        note: str | None = None,
+    ) -> None:
+        page = QWidget()
+        form = QFormLayout(page)
+
+        if note:
+            lbl = QLabel(note)
+            lbl.setWordWrap(True)
+            form.addRow(lbl)
+
+        for label_text, widget in (rows or []):
+            form.addRow(label_text, widget)
+
+        self.correction_pages[name] = page
+        self.correction_stack.addWidget(page)
+
+    def _update_correction_page(self, method: str) -> None:
+        page = self.correction_pages.get(method)
+        if page is not None:
+            self.correction_stack.setCurrentWidget(page)
 
     def _build_input_group(self) -> QGroupBox:
         box = QGroupBox("Input projection folders")
@@ -128,23 +159,113 @@ class MainWindow(QMainWindow):
 
         self.correction_combo = QComboBox()
         self.correction_combo.addItems([
-            "auto", "algotom", "repair", "filtering", "sorting", "wavelet_fft", "dead", "large"
+            "auto",
+            "algotom",
+            "repair",
+            "filtering",
+            "sorting",
+            "wavelet_fft",
+            "dead",
+            "large",
         ])
         self.correction_combo.setCurrentText("algotom")
 
-        self.snr_spin = QLineEdit("3.0")
-        self.la_size_spin = QSpinBox()
-        self.la_size_spin.setRange(1, 100000)
-        self.la_size_spin.setValue(51)
+        # algotom
+        self.snr_spin = self._make_float_spin(3.0)
+        self.la_size_spin = self._make_int_spin(51)
+        self.sm_size_spin = self._make_int_spin(21)
+        self.dim_spin = self._make_int_spin(1, 1, 8)
 
-        self.sm_size_spin = QSpinBox()
-        self.sm_size_spin.setRange(1, 100000)
-        self.sm_size_spin.setValue(21)
+        # repair
+        self.repair_thresh_spin = self._make_float_spin(5.0)
+        self.repair_max_cols_spin = self._make_int_spin(1000, 1, 1000000)
+
+        # filtering
+        self.filt_sigma_spin = self._make_int_spin(3)
+        self.filt_size_spin = self._make_int_spin(21)
+        self.filt_dim_spin = self._make_int_spin(1, 1, 8)
+        self.filt_sort_check = QCheckBox()
+        self.filt_sort_check.setChecked(True)
+
+        # sorting
+        self.sort_size_spin = self._make_int_spin(21)
+        self.sort_dim_spin = self._make_int_spin(1, 1, 8)
+
+        # wavelet_fft
+        self.wfft_level_spin = self._make_int_spin(5, 1, 100)
+        self.wfft_size_spin = self._make_int_spin(1, 1, 100000)
+        self.wfft_wavelet_name_edit = QLineEdit("db9")
+        self.wfft_window_name_combo = QComboBox()
+        self.wfft_window_name_combo.addItems(["gaussian", "butter"])
+        self.wfft_window_name_combo.setCurrentText("gaussian")
+        self.wfft_sort_check = QCheckBox()
+        self.wfft_sort_check.setChecked(False)
+
+        # dead
+        self.dead_snr_spin = self._make_float_spin(3.0)
+        self.dead_size_spin = self._make_int_spin(51)
+        self.dead_residual_check = QCheckBox()
+        self.dead_residual_check.setChecked(True)
+
+        # large
+        self.large_snr_spin = self._make_float_spin(3.0)
+        self.large_size_spin = self._make_int_spin(51)
+        self.large_drop_ratio_spin = self._make_float_spin(0.1, 0.0, 1.0, 3)
+        self.large_norm_check = QCheckBox()
+        self.large_norm_check.setChecked(True)
 
         self.workers_spin = QSpinBox()
         self.workers_spin.setRange(0, 128)
         self.workers_spin.setValue(12)
         self.workers_spin.setToolTip("0 = automatic")
+
+        self.correction_stack = QStackedWidget()
+        self.correction_pages: dict[str, QWidget] = {}
+
+        self._add_correction_page(
+            "auto",
+            note="Auto uses algotom for intensity sinograms and repair for log sinograms."
+        )
+        self._add_correction_page("algotom", [
+            ("SNR:", self.snr_spin),
+            ("la_size:", self.la_size_spin),
+            ("sm_size:", self.sm_size_spin),
+            ("dim:", self.dim_spin),
+        ])
+        self._add_correction_page("repair", [
+            ("repair_thresh:", self.repair_thresh_spin),
+            ("repair_max_cols:", self.repair_max_cols_spin),
+        ])
+        self._add_correction_page("filtering", [
+            ("filt_sigma:", self.filt_sigma_spin),
+            ("filt_size:", self.filt_size_spin),
+            ("filt_dim:", self.filt_dim_spin),
+            ("filt_sort:", self.filt_sort_check),
+        ])
+        self._add_correction_page("sorting", [
+            ("sort_size:", self.sort_size_spin),
+            ("sort_dim:", self.sort_dim_spin),
+        ])
+        self._add_correction_page("wavelet_fft", [
+            ("wfft_level:", self.wfft_level_spin),
+            ("wfft_size:", self.wfft_size_spin),
+            ("wfft_wavelet_name:", self.wfft_wavelet_name_edit),
+            ("wfft_window_name:", self.wfft_window_name_combo),
+            ("wfft_sort:", self.wfft_sort_check),
+        ])
+        self._add_correction_page("dead", [
+            ("dead_snr:", self.dead_snr_spin),
+            ("dead_size:", self.dead_size_spin),
+            ("dead_residual:", self.dead_residual_check),
+        ])
+        self._add_correction_page("large", [
+            ("large_snr:", self.large_snr_spin),
+            ("large_size:", self.large_size_spin),
+            ("large_drop_ratio:", self.large_drop_ratio_spin),
+            ("large_norm:", self.large_norm_check),
+        ])
+
+        self.correction_combo.currentTextChanged.connect(self._update_correction_page)
 
         layout.addWidget(QLabel("Mode:"), 0, 0)
         layout.addWidget(self.mode_combo, 0, 1)
@@ -152,19 +273,15 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Correction:"), 1, 0)
         layout.addWidget(self.correction_combo, 1, 1)
 
-        layout.addWidget(QLabel("SNR:"), 2, 0)
-        layout.addWidget(self.snr_spin, 2, 1)
+        layout.addWidget(QLabel("Parameters:"), 2, 0)
+        layout.addWidget(self.correction_stack, 2, 1)
 
-        layout.addWidget(QLabel("la_size:"), 3, 0)
-        layout.addWidget(self.la_size_spin, 3, 1)
+        layout.addWidget(QLabel("Workers:"), 3, 0)
+        layout.addWidget(self.workers_spin, 3, 1)
 
-        layout.addWidget(QLabel("sm_size:"), 4, 0)
-        layout.addWidget(self.sm_size_spin, 4, 1)
+        layout.setColumnStretch(1, 1)
 
-        layout.addWidget(QLabel("Workers:"), 5, 0)
-        layout.addWidget(self.workers_spin, 5, 1)
-
-
+        self._update_correction_page(self.correction_combo.currentText())
         return box
 
     def _build_run_group(self) -> QGroupBox:
@@ -224,9 +341,37 @@ class MainWindow(QMainWindow):
         return Params(
             mode=self.mode_combo.currentText(),
             correction=self.correction_combo.currentText(),
-            snr=float(self.snr_spin.text()),
+
+            snr=self.snr_spin.value(),
             la_size=self.la_size_spin.value(),
             sm_size=self.sm_size_spin.value(),
+            dim=self.dim_spin.value(),
+
+            repair_thresh=self.repair_thresh_spin.value(),
+            repair_max_cols=self.repair_max_cols_spin.value(),
+
+            filt_sigma=self.filt_sigma_spin.value(),
+            filt_size=self.filt_size_spin.value(),
+            filt_dim=self.filt_dim_spin.value(),
+            filt_sort=self.filt_sort_check.isChecked(),
+
+            sort_size=self.sort_size_spin.value(),
+            sort_dim=self.sort_dim_spin.value(),
+
+            wfft_level=self.wfft_level_spin.value(),
+            wfft_size=self.wfft_size_spin.value(),
+            wfft_wavelet_name=self.wfft_wavelet_name_edit.text().strip() or "db9",
+            wfft_window_name=self.wfft_window_name_combo.currentText(),
+            wfft_sort=self.wfft_sort_check.isChecked(),
+
+            dead_snr=self.dead_snr_spin.value(),
+            dead_size=self.dead_size_spin.value(),
+            dead_residual=self.dead_residual_check.isChecked(),
+
+            large_snr=self.large_snr_spin.value(),
+            large_size=self.large_size_spin.value(),
+            large_drop_ratio=self.large_drop_ratio_spin.value(),
+            large_norm=self.large_norm_check.isChecked(),
         )
 
     def build_jobs(self) -> list[ProjectionJob]:
