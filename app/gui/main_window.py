@@ -54,7 +54,8 @@ class MainWindow(QMainWindow):
 
         root.addWidget(self._build_input_group())
         root.addWidget(self._build_pipeline_group())
-        root.addWidget(self._build_output_group())
+        self.output_group = self._build_output_group()
+        root.addWidget(self.output_group)
 
         self.algorithm_group = self._build_algorithm_group()
         root.addWidget(self.algorithm_group)
@@ -347,7 +348,6 @@ class MainWindow(QMainWindow):
         self.cera_config_btn = QPushButton("Browse...")
         self.cera_config_btn.clicked.connect(self.pick_cera_config_template)
 
-        self.reconstruction_folder_name_edit = QLineEdit("reconstruction")
         self.reconstruction_name_edit = QLineEdit()
         self.reconstruction_name_edit.setPlaceholderText("Leave empty to use input folder name")
 
@@ -366,13 +366,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.cera_config_edit, 1, 1)
         layout.addWidget(self.cera_config_btn, 1, 2)
 
-        layout.addWidget(QLabel("Reconstruction subfolder:"), 2, 0)
-        layout.addWidget(self.reconstruction_folder_name_edit, 2, 1, 1, 2)
+        layout.addWidget(QLabel("Reconstruction name:"), 2, 0)
+        layout.addWidget(self.reconstruction_name_edit, 2, 1, 1, 2)
 
-        layout.addWidget(QLabel("Reconstruction name:"), 3, 0)
-        layout.addWidget(self.reconstruction_name_edit, 3, 1, 1, 2)
-
-        layout.addWidget(placeholder_note, 4, 0, 1, 3)
+        layout.addWidget(placeholder_note, 3, 0, 1, 3)
         layout.setColumnStretch(1, 1)
 
         return box
@@ -457,6 +454,8 @@ class MainWindow(QMainWindow):
             self.algorithm_group.setEnabled(run_ring)
         if hasattr(self, "reconstruction_group"):
             self.reconstruction_group.setEnabled(run_recon)
+        if hasattr(self, "output_group"):
+            self.output_group.setEnabled(mode != "reconstruction_only")
 
     def append_log(self, text: str) -> None:
         self.log_edit.appendPlainText(text)
@@ -501,7 +500,6 @@ class MainWindow(QMainWindow):
         pipeline_mode = self.pipeline_combo.currentData()
         cera_python = self.cera_python_edit.text().strip() or None
         cera_config = self.cera_config_edit.text().strip() or None
-        reconstruction_folder_name = self.reconstruction_folder_name_edit.text().strip() or "reconstruction"
         reconstruction_name = self.reconstruction_name_edit.text().strip() or None
 
         for i in range(self.folder_list.count()):
@@ -519,7 +517,6 @@ class MainWindow(QMainWindow):
                     pipeline_mode=pipeline_mode,
                     cera_python_exe=cera_python,
                     cera_config_template=cera_config,
-                    reconstruction_folder_name=reconstruction_folder_name,
                     reconstruction_name=reconstruction_name,
                 )
             )

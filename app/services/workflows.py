@@ -43,7 +43,6 @@ class ProjectionJob:
     pipeline_mode: str = "ring_removal_only"  # ring_removal_only | reconstruction_only | ring_removal_and_reconstruction
     cera_python_exe: str | None = None
     cera_config_template: str | None = None
-    reconstruction_folder_name: str = "reconstruction"
     reconstruction_name: str | None = None
 
 
@@ -124,10 +123,8 @@ def _reconstruction_settings_dict(job: ProjectionJob) -> dict:
     return {
         "cera_python_exe": job.cera_python_exe,
         "cera_config_template": job.cera_config_template,
-        "reconstruction_folder_name": job.reconstruction_folder_name,
         "reconstruction_name": job.reconstruction_name or "<input folder name>",
     }
-
 
 def _log_line(
     lines: list[str],
@@ -222,15 +219,21 @@ def process_projection_job(
     if not input_dir.exists() or not input_dir.is_dir():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
 
-    out_dir = Path(
-        resolve_output_dir(
-            input_dir=str(input_dir),
-            mode=job.output_mode,
-            folder_name=job.folder_name,
-            custom_dir=job.custom_output_dir,
+    if job.pipeline_mode == "reconstruction_only":
+        # For reconstruction-only, use the input projection folder directly.
+        out_dir = input_dir
+    else:
+        # For ring-removal-only and ring-removal+reconstruction,
+        # keep the normal corrected-projection output folder logic.
+        out_dir = Path(
+            resolve_output_dir(
+                input_dir=str(input_dir),
+                mode=job.output_mode,
+                folder_name=job.folder_name,
+                custom_dir=job.custom_output_dir,
+            )
         )
-    )
-    out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
 
     run_ring = job.pipeline_mode in ("ring_removal_only", "ring_removal_and_reconstruction")
     run_recon = job.pipeline_mode in ("reconstruction_only", "ring_removal_and_reconstruction")
@@ -346,8 +349,11 @@ def process_projection_job(
             if not job.cera_config_template:
                 raise ValueError("CERA config template is required for reconstruction.")
 
-            recon_output_dir = out_dir / (job.reconstruction_folder_name.strip() or "reconstruction")
-            recon_output_dir.mkdir(parents=True, exist_ok=True)
+            # Reconstruction must run in the same folder where the projections used
+            # by CERA are located:
+            # - input_dir for reconstruction_only
+            # - corrected projection folder for ring_removal_and_reconstruction
+            recon_output_dir = projection_source_for_reconstruction
 
             recon_name = (job.reconstruction_name or input_dir.name).strip() or input_dir.name
 
