@@ -416,7 +416,15 @@ class MainWindow(QMainWindow):
 
     def on_job_finished(self, result: dict) -> None:
         out_dir = result.get("output_dir", "")
+        log_path = result.get("log_path", "")
+        summary_path = result.get("summary_path", "")
+
         self.append_log(f"Finished successfully: {out_dir}")
+        if log_path:
+            self.append_log(f"Saved text log: {log_path}")
+        if summary_path:
+            self.append_log(f"Saved JSON summary: {summary_path}")
+
         self._job_done()
 
     def on_job_error(self, error_text: str) -> None:
