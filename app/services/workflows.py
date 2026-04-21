@@ -11,7 +11,7 @@ import json
 import tempfile
 import traceback
 from datetime import datetime
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -24,6 +24,7 @@ from ringremoval.projections import (
 from ringremoval.stack import correct_tiff_stack
 
 from .path_rules import resolve_output_dir
+from .reconstruction_cera import run_cera_reconstruction
 
 
 @dataclass
@@ -39,16 +40,19 @@ class ProjectionJob:
     temp_dir: str | None = None
     workers: int = 12
 
+    pipeline_mode: str = "ring_removal_only"  # ring_removal_only | reconstruction_only | ring_removal_and_reconstruction
+    cera_python_exe: str | None = None
+    cera_config_template: str | None = None
+    reconstruction_folder_name: str = "reconstruction"
+    reconstruction_name: str | None = None
+
 
 def _emit(cb: Optional[Callable[[str], None]], message: str) -> None:
     if cb:
         cb(message)
 
-def _used_params_dict(params: Params) -> dict:
-    """
-    Return only the parameters that are relevant for the selected correction method,
-    plus a few general fields that are meaningful to users.
-    """
+
+def _used_ring_params_dict(params: Params) -> dict:
     base = {
         "mode": params.mode,
         "correction": params.correction,
@@ -101,11 +105,9 @@ def _used_params_dict(params: Params) -> dict:
 
 
 def _job_settings_dict(job: ProjectionJob) -> dict:
-    """
-    Return only the job settings that are useful to users in the log.
-    """
     return {
         "input_dir": job.input_dir,
+        "pipeline_mode": job.pipeline_mode,
         "output_mode": job.output_mode,
         "folder_name": job.folder_name,
         "custom_output_dir": job.custom_output_dir,
@@ -116,6 +118,16 @@ def _job_settings_dict(job: ProjectionJob) -> dict:
         "temp_dir": job.temp_dir,
         "workers": job.workers,
     }
+
+
+def _reconstruction_settings_dict(job: ProjectionJob) -> dict:
+    return {
+        "cera_python_exe": job.cera_python_exe,
+        "cera_config_template": job.cera_config_template,
+        "reconstruction_folder_name": job.reconstruction_folder_name,
+        "reconstruction_name": job.reconstruction_name or "<input folder name>",
+    }
+
 
 def _log_line(
     lines: list[str],
@@ -142,11 +154,12 @@ def _write_run_log(
     error_text: str | None = None,
 ) -> None:
     job_dict = _job_settings_dict(job)
-    params_dict = _used_params_dict(params)
+    ring_params_dict = _used_ring_params_dict(params)
+    recon_dict = _reconstruction_settings_dict(job)
 
     lines: list[str] = []
-    lines.append("Micro-CT Ring Removal Run Log")
-    lines.append("=" * 40)
+    lines.append("Micro-CT Ring Removal / Reconstruction Run Log")
+    lines.append("=" * 52)
     lines.append(f"Started: {started_at.isoformat(timespec='seconds')}")
     lines.append(f"Finished: {finished_at.isoformat(timespec='seconds')}")
     lines.append(f"Status: {status}")
@@ -162,10 +175,22 @@ def _write_run_log(
         lines.append(f"{key}: {value}")
     lines.append("")
 
-    lines.append("Correction parameters used in this run")
-    lines.append("-" * 32)
-    for key, value in params_dict.items():
-        lines.append(f"{key}: {value}")
+    lines.append("Ring-correction parameters used in this run")
+    lines.append("-" * 41)
+    if job.pipeline_mode == "reconstruction_only":
+        lines.append("not_run: True")
+    else:
+        for key, value in ring_params_dict.items():
+            lines.append(f"{key}: {value}")
+    lines.append("")
+
+    lines.append("Reconstruction settings used in this run")
+    lines.append("-" * 39)
+    if job.pipeline_mode == "ring_removal_only":
+        lines.append("not_run: True")
+    else:
+        for key, value in recon_dict.items():
+            lines.append(f"{key}: {value}")
     lines.append("")
 
     lines.append("Run messages")
@@ -188,11 +213,10 @@ def process_projection_job(
     progress: Optional[Callable[[int, int], None]] = None,
 ) -> dict:
     """
-    Pipeline:
-      projections folder
-        -> temporary sinogram stack
-        -> corrected sinogram stack
-        -> corrected projection folder
+    Supported pipelines:
+      1) ring_removal_only
+      2) reconstruction_only
+      3) ring_removal_and_reconstruction
     """
     input_dir = Path(job.input_dir).resolve()
     if not input_dir.exists() or not input_dir.is_dir():
@@ -208,6 +232,20 @@ def process_projection_job(
     )
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    run_ring = job.pipeline_mode in ("ring_removal_only", "ring_removal_and_reconstruction")
+    run_recon = job.pipeline_mode in ("reconstruction_only", "ring_removal_and_reconstruction")
+    if not run_ring and not run_recon:
+        raise ValueError(f"Unknown pipeline mode: {job.pipeline_mode!r}")
+
+    total_steps = (3 if run_ring else 0) + (1 if run_recon else 0)
+    completed_steps = 0
+
+    def advance_progress() -> None:
+        nonlocal completed_steps
+        completed_steps += 1
+        if progress:
+            progress(completed_steps, total_steps)
+
     started_at = datetime.now()
     log_lines: list[str] = []
     status = "SUCCESS"
@@ -215,93 +253,132 @@ def process_projection_job(
     summary_path = out_dir / "ringremoval_job_summary.json"
     log_path = out_dir / f"ringremoval_run_{started_at:%Y%m%d_%H%M%S}.log"
 
+    temp_root_ctx = None
+    temp_root: Path | None = None
+
     def log_line(message: str) -> None:
         _log_line(log_lines, log, message)
 
     log_line(f"Input: {input_dir}")
-    log_line(f"Output: {out_dir}")
-    log_line(f"Requested correction: {params.correction}")
-    log_line(f"Workers: {job.workers}")
+    log_line(f"Output root: {out_dir}")
+    log_line(f"Pipeline mode: {job.pipeline_mode}")
 
-    temp_root_ctx = None
+    if run_ring:
+        log_line(f"Requested correction: {params.correction}")
+        log_line(f"Workers: {job.workers}")
 
-    # Always keep temp files on the same drive as the input data unless the user
-    # explicitly selected another temp_dir.
-    if job.temp_dir:
-        temp_base = Path(job.temp_dir).resolve()
-    else:
-        # Put temp workspace beside the input folder, not on C:\\Temp
-        temp_base = input_dir / "_ringremoval_temp"
+        if job.temp_dir:
+            temp_base = Path(job.temp_dir).resolve()
+        else:
+            temp_base = input_dir / "_ringremoval_temp"
 
-    temp_base.mkdir(parents=True, exist_ok=True)
+        temp_base.mkdir(parents=True, exist_ok=True)
 
-    if job.keep_temp:
-        temp_root = (temp_base / f"{input_dir.name}_work").resolve()
-        temp_root.mkdir(parents=True, exist_ok=True)
-    else:
-        temp_root_ctx = tempfile.TemporaryDirectory(dir=str(temp_base))
-        temp_root = Path(temp_root_ctx.name)
+        if job.keep_temp:
+            temp_root = (temp_base / f"{input_dir.name}_work").resolve()
+            temp_root.mkdir(parents=True, exist_ok=True)
+        else:
+            temp_root_ctx = tempfile.TemporaryDirectory(dir=str(temp_base))
+            temp_root = Path(temp_root_ctx.name)
+
+    sino_meta = None
+    corr_meta = None
+    proj_meta = None
+    recon_meta = None
 
     try:
-        sino_stack = temp_root / "sinograms_stack.tif"
-        corrected_sino_stack = temp_root / "sinograms_corrected_stack.tif"
+        projection_source_for_reconstruction = input_dir
 
-        log_line("Step 1/3: Building sinograms from projection folder...")
-        sino_spec = ProjectionsToSinogramsSpec(
-            projections_dir=str(input_dir),
-            output_mode="stack",
-            output_sinogram_stack_tiff=str(sino_stack),
-            glob_pattern=job.glob_pattern,
-            recursive=job.recursive,
-            overwrite=True,
-            temp_dir=str(temp_root),
-        )
-        sino_meta = build_sinogram_stack_from_projection_dir(sino_spec)
+        if run_ring:
+            assert temp_root is not None
+            sino_stack = temp_root / "sinograms_stack.tif"
+            corrected_sino_stack = temp_root / "sinograms_corrected_stack.tif"
 
-        if progress:
-            progress(1, 3)
+            log_line("Step 1: Building sinograms from projection folder...")
+            sino_spec = ProjectionsToSinogramsSpec(
+                projections_dir=str(input_dir),
+                output_mode="stack",
+                output_sinogram_stack_tiff=str(sino_stack),
+                glob_pattern=job.glob_pattern,
+                recursive=job.recursive,
+                overwrite=True,
+                temp_dir=str(temp_root),
+            )
+            sino_meta = build_sinogram_stack_from_projection_dir(sino_spec)
+            advance_progress()
 
-        log_line("Step 2/3: Correcting ring artefacts in sinograms...")
+            log_line("Step 2: Correcting ring artefacts in sinograms...")
 
-        def on_stack_progress(done: int, total: int, page_idx: int, meta: dict) -> None:
-            if "error" in meta:
-                log_line(f"FAIL page={page_idx}: {meta['error']}")
+            def on_stack_progress(done: int, total: int, page_idx: int, meta: dict) -> None:
+                if "error" in meta:
+                    log_line(f"FAIL page={page_idx}: {meta['error']}")
+                else:
+                    log_line(f"OK page={page_idx + 1}/{total}")
+
+            corr_meta = correct_tiff_stack(
+                input_tiff=str(sino_stack),
+                output_sino_tiff=str(corrected_sino_stack),
+                params=params,
+                overwrite=True,
+                workers=job.workers,
+                on_progress=on_stack_progress,
+            )
+            advance_progress()
+
+            log_line("Step 3: Converting corrected sinograms back to projections...")
+            proj_meta = sinograms_to_projection_files(
+                input_mode="stack",
+                input_path=str(corrected_sino_stack),
+                output_dir=str(out_dir),
+                projection_template="tomo_{index:04d}.tif",
+                overwrite=job.overwrite,
+                temp_dir=str(temp_root),
+            )
+            advance_progress()
+
+            projection_source_for_reconstruction = out_dir
+        else:
+            log_line("Ring-removal phase skipped by selected pipeline.")
+
+        if run_recon:
+            if not job.cera_python_exe:
+                raise ValueError("CERA Python executable is required for reconstruction.")
+            if not job.cera_config_template:
+                raise ValueError("CERA config template is required for reconstruction.")
+
+            recon_output_dir = out_dir / (job.reconstruction_folder_name.strip() or "reconstruction")
+            recon_output_dir.mkdir(parents=True, exist_ok=True)
+
+            recon_name = (job.reconstruction_name or input_dir.name).strip() or input_dir.name
+
+            if run_ring:
+                log_line("Step 4: Running CERA reconstruction from corrected projections...")
             else:
-                log_line(f"OK page={page_idx + 1}/{total}")
+                log_line("Step 1: Running CERA reconstruction directly from input projections...")
 
-        corr_meta = correct_tiff_stack(
-            input_tiff=str(sino_stack),
-            output_sino_tiff=str(corrected_sino_stack),
-            params=params,
-            overwrite=True,
-            workers=job.workers,
-            on_progress=on_stack_progress,
-        )
-
-        if progress:
-            progress(2, 3)
-
-        log_line("Step 3/3: Converting corrected sinograms back to projections...")
-        proj_meta = sinograms_to_projection_files(
-            input_mode="stack",
-            input_path=str(corrected_sino_stack),
-            output_dir=str(out_dir),
-            projection_template="tomo_{index:04d}.tif",
-            overwrite=job.overwrite,
-            temp_dir=str(temp_root),
-        )
-
-        if progress:
-            progress(3, 3)
+            recon_meta = run_cera_reconstruction(
+                python_exe=job.cera_python_exe,
+                template_config_path=job.cera_config_template,
+                projections_dir=str(projection_source_for_reconstruction),
+                output_dir=str(recon_output_dir),
+                output_name=recon_name,
+                input_folder_name=input_dir.name,
+                log=log_line,
+            )
+            advance_progress()
+        else:
+            log_line("Reconstruction phase skipped by selected pipeline.")
 
         summary = {
             "input_dir": str(input_dir),
             "output_dir": str(out_dir),
+            "pipeline_mode": job.pipeline_mode,
+            "ring_params_used": None if job.pipeline_mode == "reconstruction_only" else _used_ring_params_dict(params),
+            "reconstruction_settings": None if job.pipeline_mode == "ring_removal_only" else _reconstruction_settings_dict(job),
             "sinogram_build": sino_meta,
             "correction": corr_meta,
             "projection_export": proj_meta,
-            "params": asdict(params),
-            "job": asdict(job),
+            "reconstruction": recon_meta,
             "log_path": str(log_path),
             "summary_path": str(summary_path),
         }
