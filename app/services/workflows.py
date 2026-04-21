@@ -44,6 +44,78 @@ def _emit(cb: Optional[Callable[[str], None]], message: str) -> None:
     if cb:
         cb(message)
 
+def _used_params_dict(params: Params) -> dict:
+    """
+    Return only the parameters that are relevant for the selected correction method,
+    plus a few general fields that are meaningful to users.
+    """
+    base = {
+        "mode": params.mode,
+        "correction": params.correction,
+    }
+
+    per_method = {
+        "auto": {},
+        "algotom": {
+            "snr": params.snr,
+            "la_size": params.la_size,
+            "sm_size": params.sm_size,
+            "dim": params.dim,
+        },
+        "repair": {
+            "repair_thresh": params.repair_thresh,
+            "repair_max_cols": params.repair_max_cols,
+        },
+        "filtering": {
+            "filt_sigma": params.filt_sigma,
+            "filt_size": params.filt_size,
+            "filt_dim": params.filt_dim,
+            "filt_sort": params.filt_sort,
+        },
+        "sorting": {
+            "sort_size": params.sort_size,
+            "sort_dim": params.sort_dim,
+        },
+        "wavelet_fft": {
+            "wfft_level": params.wfft_level,
+            "wfft_size": params.wfft_size,
+            "wfft_wavelet_name": params.wfft_wavelet_name,
+            "wfft_window_name": params.wfft_window_name,
+            "wfft_sort": params.wfft_sort,
+        },
+        "dead": {
+            "dead_snr": params.dead_snr,
+            "dead_size": params.dead_size,
+            "dead_residual": params.dead_residual,
+        },
+        "large": {
+            "large_snr": params.large_snr,
+            "large_size": params.large_size,
+            "large_drop_ratio": params.large_drop_ratio,
+            "large_norm": params.large_norm,
+        },
+    }
+
+    base.update(per_method.get(params.correction, {}))
+    return base
+
+
+def _job_settings_dict(job: ProjectionJob) -> dict:
+    """
+    Return only the job settings that are useful to users in the log.
+    """
+    return {
+        "input_dir": job.input_dir,
+        "output_mode": job.output_mode,
+        "folder_name": job.folder_name,
+        "custom_output_dir": job.custom_output_dir,
+        "glob_pattern": job.glob_pattern,
+        "recursive": job.recursive,
+        "overwrite": job.overwrite,
+        "keep_temp": job.keep_temp,
+        "temp_dir": job.temp_dir,
+        "workers": job.workers,
+    }
 
 def _log_line(
     lines: list[str],
@@ -69,8 +141,8 @@ def _write_run_log(
     summary_path: Path | None = None,
     error_text: str | None = None,
 ) -> None:
-    job_dict = asdict(job)
-    params_dict = asdict(params)
+    job_dict = _job_settings_dict(job)
+    params_dict = _used_params_dict(params)
 
     lines: list[str] = []
     lines.append("Micro-CT Ring Removal Run Log")
@@ -90,7 +162,7 @@ def _write_run_log(
         lines.append(f"{key}: {value}")
     lines.append("")
 
-    lines.append("Correction / processing parameters")
+    lines.append("Correction parameters used in this run")
     lines.append("-" * 32)
     for key, value in params_dict.items():
         lines.append(f"{key}: {value}")
