@@ -344,6 +344,10 @@ class MainWindow(QMainWindow):
         self.cera_python_btn = QPushButton("Browse...")
         self.cera_python_btn.clicked.connect(self.pick_cera_python_exe)
 
+        self.use_custom_cera_config_check = QCheckBox("Use custom CERA config template")
+        self.use_custom_cera_config_check.setChecked(False)
+        self.use_custom_cera_config_check.toggled.connect(self._update_cera_config_state)
+
         self.cera_config_edit = QLineEdit()
         self.cera_config_btn = QPushButton("Browse...")
         self.cera_config_btn.clicked.connect(self.pick_cera_config_template)
@@ -352,7 +356,12 @@ class MainWindow(QMainWindow):
         self.reconstruction_name_edit.setPlaceholderText("Leave empty to use input folder name")
 
         placeholder_note = QLabel(
-            "Your CERA config template may contain placeholders:\n"
+            "Default behavior:\n"
+            "- Reconstruction only: use the .config file found in the selected input folder.\n"
+            "- Ring removal + reconstruction: use the .config file from the original input folder,\n"
+            "  then render a reconstruction config into the corrected projections folder.\n\n"
+            "Enable the custom option only for special cases.\n\n"
+            "Supported placeholders:\n"
             "{{PROJECTIONS_DIR}}, {{PROJECTIONS_DIR_POSIX}}, {{OUTPUT_DIR}}, "
             "{{OUTPUT_DIR_POSIX}}, {{OUTPUT_NAME}}, {{INPUT_FOLDER_NAME}}"
         )
@@ -362,16 +371,19 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.cera_python_edit, 0, 1)
         layout.addWidget(self.cera_python_btn, 0, 2)
 
-        layout.addWidget(QLabel("CERA config template:"), 1, 0)
-        layout.addWidget(self.cera_config_edit, 1, 1)
-        layout.addWidget(self.cera_config_btn, 1, 2)
+        layout.addWidget(self.use_custom_cera_config_check, 1, 0, 1, 3)
 
-        layout.addWidget(QLabel("Reconstruction name:"), 2, 0)
-        layout.addWidget(self.reconstruction_name_edit, 2, 1, 1, 2)
+        layout.addWidget(QLabel("Custom CERA config template:"), 2, 0)
+        layout.addWidget(self.cera_config_edit, 2, 1)
+        layout.addWidget(self.cera_config_btn, 2, 2)
 
-        layout.addWidget(placeholder_note, 3, 0, 1, 3)
+        layout.addWidget(QLabel("Reconstruction name:"), 3, 0)
+        layout.addWidget(self.reconstruction_name_edit, 3, 1, 1, 2)
+
+        layout.addWidget(placeholder_note, 4, 0, 1, 3)
         layout.setColumnStretch(1, 1)
 
+        self._update_cera_config_state()
         return box
 
     def _build_run_group(self) -> QGroupBox:
@@ -444,6 +456,11 @@ class MainWindow(QMainWindow):
         is_custom = mode == "custom"
         self.custom_output_edit.setEnabled(is_custom)
         self.custom_output_btn.setEnabled(is_custom)
+        
+    def _update_cera_config_state(self, *_args) -> None:
+        use_custom = self.use_custom_cera_config_check.isChecked()
+        self.cera_config_edit.setEnabled(use_custom)
+        self.cera_config_btn.setEnabled(use_custom)
 
     def _update_pipeline_state(self, *_args) -> None:
         mode = self.pipeline_combo.currentData()
@@ -499,6 +516,7 @@ class MainWindow(QMainWindow):
 
         pipeline_mode = self.pipeline_combo.currentData()
         cera_python = self.cera_python_edit.text().strip() or None
+        use_custom_cera_config = self.use_custom_cera_config_check.isChecked()
         cera_config = self.cera_config_edit.text().strip() or None
         reconstruction_name = self.reconstruction_name_edit.text().strip() or None
 
@@ -516,6 +534,7 @@ class MainWindow(QMainWindow):
                     workers=self.workers_spin.value(),
                     pipeline_mode=pipeline_mode,
                     cera_python_exe=cera_python,
+                    use_custom_cera_config=use_custom_cera_config,
                     cera_config_template=cera_config,
                     reconstruction_name=reconstruction_name,
                 )
@@ -526,7 +545,6 @@ class MainWindow(QMainWindow):
         pipeline_mode = self.pipeline_combo.currentData()
         if pipeline_mode in ("reconstruction_only", "ring_removal_and_reconstruction"):
             cera_python = self.cera_python_edit.text().strip()
-            cera_config = self.cera_config_edit.text().strip()
 
             if not cera_python:
                 QMessageBox.warning(self, "Missing CERA Python", "Please select the Python executable from your CERA environment.")
@@ -535,12 +553,14 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Invalid CERA Python", f"File not found:\n{cera_python}")
                 return False
 
-            if not cera_config:
-                QMessageBox.warning(self, "Missing CERA config", "Please select a CERA config template file.")
-                return False
-            if not Path(cera_config).exists():
-                QMessageBox.warning(self, "Invalid CERA config", f"File not found:\n{cera_config}")
-                return False
+            if self.use_custom_cera_config_check.isChecked():
+                cera_config = self.cera_config_edit.text().strip()
+                if not cera_config:
+                    QMessageBox.warning(self, "Missing CERA config", "Please select a custom CERA config template file.")
+                    return False
+                if not Path(cera_config).exists():
+                    QMessageBox.warning(self, "Invalid CERA config", f"File not found:\n{cera_config}")
+                    return False
 
         return True
 

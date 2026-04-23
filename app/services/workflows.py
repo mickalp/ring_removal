@@ -42,6 +42,7 @@ class ProjectionJob:
 
     pipeline_mode: str = "ring_removal_only"  # ring_removal_only | reconstruction_only | ring_removal_and_reconstruction
     cera_python_exe: str | None = None
+    use_custom_cera_config: bool = False
     cera_config_template: str | None = None
     reconstruction_name: str | None = None
 
@@ -122,9 +123,40 @@ def _job_settings_dict(job: ProjectionJob) -> dict:
 def _reconstruction_settings_dict(job: ProjectionJob) -> dict:
     return {
         "cera_python_exe": job.cera_python_exe,
-        "cera_config_template": job.cera_config_template,
+        "use_custom_cera_config": job.use_custom_cera_config,
+        "cera_config_template": (
+            job.cera_config_template if job.use_custom_cera_config else "<auto from input folder>"
+        ),
         "reconstruction_name": job.reconstruction_name or "<input folder name>",
     }
+    
+def _find_default_cera_config(input_dir: Path) -> Path:
+    """
+    Find the default CERA config in the selected input folder.
+
+    Expected behavior:
+    - exactly one .config or .cfg file in the input folder -> use it
+    - none -> fail with a clear message
+    - more than one -> ask user to enable custom override in GUI
+    """
+    configs = sorted(input_dir.glob("*.config"))
+    if not configs:
+        configs = sorted(input_dir.glob("*.cfg"))
+
+    if not configs:
+        raise FileNotFoundError(
+            f"No .config or .cfg file found in input folder:\n{input_dir}"
+        )
+
+    if len(configs) > 1:
+        names = ", ".join(p.name for p in configs)
+        raise ValueError(
+            "More than one CERA config file was found in the input folder:\n"
+            f"{names}\n\n"
+            "Enable 'Use custom CERA config template' in the GUI to choose one explicitly."
+        )
+
+    return configs[0]
 
 def _log_line(
     lines: list[str],
@@ -346,15 +378,21 @@ def process_projection_job(
         if run_recon:
             if not job.cera_python_exe:
                 raise ValueError("CERA Python executable is required for reconstruction.")
-            if not job.cera_config_template:
-                raise ValueError("CERA config template is required for reconstruction.")
 
-            # Reconstruction must run in the same folder where the projections used
-            # by CERA are located:
-            # - input_dir for reconstruction_only
-            # - corrected projection folder for ring_removal_and_reconstruction
+            if job.use_custom_cera_config:
+                if not job.cera_config_template:
+                    raise ValueError("Custom CERA config template was enabled, but no config file was selected.")
+
+                cera_config_template = Path(job.cera_config_template).resolve()
+                if not cera_config_template.exists():
+                    raise FileNotFoundError(f"CERA config template not found: {cera_config_template}")
+
+                log_line(f"Using custom CERA config template: {cera_config_template}")
+            else:
+                cera_config_template = _find_default_cera_config(input_dir)
+                log_line(f"Using default CERA config from input folder: {cera_config_template}")
+
             recon_output_dir = projection_source_for_reconstruction
-
             recon_name = (job.reconstruction_name or input_dir.name).strip() or input_dir.name
 
             if run_ring:
@@ -364,7 +402,7 @@ def process_projection_job(
 
             recon_meta = run_cera_reconstruction(
                 python_exe=job.cera_python_exe,
-                template_config_path=job.cera_config_template,
+                template_config_path=str(cera_config_template),
                 projections_dir=str(projection_source_for_reconstruction),
                 output_dir=str(recon_output_dir),
                 output_name=recon_name,
@@ -381,6 +419,7 @@ def process_projection_job(
             "pipeline_mode": job.pipeline_mode,
             "ring_params_used": None if job.pipeline_mode == "reconstruction_only" else _used_ring_params_dict(params),
             "reconstruction_settings": None if job.pipeline_mode == "ring_removal_only" else _reconstruction_settings_dict(job),
+            "resolved_cera_config_template": str(cera_config_template) if run_recon else None,
             "sinogram_build": sino_meta,
             "correction": corr_meta,
             "projection_export": proj_meta,
