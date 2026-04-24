@@ -44,7 +44,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Micro-CT Ring Removal & Reconstruction")
         self.resize(1100, 850)
 
-        self.thread_pool = QThreadPool.globalInstance()
+
+        # Use a dedicated pool and force serial execution of folder jobs.
+        # This prevents multiple ring-removal/CERA pipelines from overlapping.
+        self.thread_pool = QThreadPool(self)
+        self.thread_pool.setMaxThreadCount(1)  # run one folder-job at a time
         self.pending_jobs = 0
 
         central = QWidget()
