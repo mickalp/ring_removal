@@ -9,7 +9,7 @@ import utilities
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run CERA FDK reconstruction from a config file.")
-    parser.add_argument("--config", required=True, help="Rendered CERA config file path")
+    parser.add_argument("--config", required=True, help="CERA config file path")
     args = parser.parse_args()
 
     config_path = Path(args.config).resolve()
