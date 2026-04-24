@@ -67,6 +67,7 @@ def run_cera_reconstruction(
     output_name: str,
     input_folder_name: str,
     log: Optional[Callable[[str], None]] = None,
+    render_config: bool = True,
 ) -> dict:
     """
     Launch the standalone CERA helper script in a separate Python environment.
@@ -93,18 +94,23 @@ def run_cera_reconstruction(
         raise FileNotFoundError(f"CERA helper script not found: {helper_script}")
 
     safe_output_name = (output_name or input_folder_name or projections_path.name).strip()
-    rendered_config = output_path / f"{safe_output_name}_cera_rendered.config"
 
-    render_cera_config(
-        template_path,
-        rendered_config,
-        projections_dir=projections_path,
-        output_dir=output_path,
-        output_name=safe_output_name,
-        input_folder_name=input_folder_name,
-    )
+    if render_config:
+        config_to_use = output_path / f"{safe_output_name}_cera_rendered.config"
 
-    cmd = [str(python_path), "-u", str(helper_script), "--config", str(rendered_config)]
+        render_cera_config(
+            template_path,
+            config_to_use,
+            projections_dir=projections_path,
+            output_dir=output_path,
+            output_name=safe_output_name,
+            input_folder_name=input_folder_name,
+        )
+    else:
+        config_to_use = template_path
+        _emit(log, f"Using existing CERA config without rendering: {config_to_use}")
+
+    cmd = [str(python_path), "-u", str(helper_script), "--config", str(config_to_use)]
     _emit(log, f"Starting CERA reconstruction with: {subprocess.list2cmdline(cmd)}")
 
     output_lines: list[str] = []
@@ -131,7 +137,8 @@ def run_cera_reconstruction(
     return {
         "python_exe": str(python_path),
         "template_config_path": str(template_path),
-        "rendered_config_path": str(rendered_config),
+        "config_path_used": str(config_to_use),
+        "rendered_config_path": str(config_to_use) if render_config else None,
         "projections_dir": str(projections_path),
         "output_dir": str(output_path),
         "output_name": safe_output_name,

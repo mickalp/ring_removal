@@ -408,6 +408,7 @@ def process_projection_job(
                 output_name=recon_name,
                 input_folder_name=input_dir.name,
                 log=log_line,
+                render_config=run_ring,
             )
             advance_progress()
         else:
