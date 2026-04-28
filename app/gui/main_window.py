@@ -37,6 +37,7 @@ from app.gui.workers import ProjectionJobWorker
 from app.services.workflows import ProjectionJob
 from ringremoval.engine import Params
 
+DEFAULT_CERA_PYTHON_EXE = r"C:\Users\syrmep\miniforge3\python.exe"
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -344,7 +345,7 @@ class MainWindow(QMainWindow):
         box = QGroupBox("Reconstruction (CERA)")
         layout = QGridLayout(box)
 
-        self.cera_python_edit = QLineEdit()
+        self.cera_python_edit = QLineEdit(DEFAULT_CERA_PYTHON_EXE)
         self.cera_python_btn = QPushButton("Browse...")
         self.cera_python_btn.clicked.connect(self.pick_cera_python_exe)
 
@@ -439,7 +440,7 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Select CERA Python executable",
-            str(Path.home()),
+            str(Path(DEFAULT_CERA_PYTHON_EXE).parent),
             "Executables (*.exe);;All files (*)",
         )
         if path:
@@ -519,7 +520,7 @@ class MainWindow(QMainWindow):
         jobs: list[ProjectionJob] = []
 
         pipeline_mode = self.pipeline_combo.currentData()
-        cera_python = self.cera_python_edit.text().strip() or None
+        cera_python = self.cera_python_edit.text().strip() or DEFAULT_CERA_PYTHON_EXE
         use_custom_cera_config = self.use_custom_cera_config_check.isChecked()
         cera_config = self.cera_config_edit.text().strip() or None
         reconstruction_name = self.reconstruction_name_edit.text().strip() or None
@@ -548,7 +549,7 @@ class MainWindow(QMainWindow):
     def _validate_before_run(self) -> bool:
         pipeline_mode = self.pipeline_combo.currentData()
         if pipeline_mode in ("reconstruction_only", "ring_removal_and_reconstruction"):
-            cera_python = self.cera_python_edit.text().strip()
+            cera_python = self.cera_python_edit.text().strip() or DEFAULT_CERA_PYTHON_EXE
 
             if not cera_python:
                 QMessageBox.warning(self, "Missing CERA Python", "Please select the Python executable from your CERA environment.")
